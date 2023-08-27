@@ -147,7 +147,7 @@ def get_market(token, waypoint, priority="NORMAL"):
         for import_ in market["imports"]:
             db_insert("Markets", ["Waypoint", "Symbol"], [waypoint, import_["symbol"]])
             db_update("Markets", ["isImport"], [True], ["Waypoint", "Symbol"], [waypoint, import_["symbol"]])
-        for exchange in market["exports"]:
+        for exchange in market["exchange"]:
             db_insert("Markets", ["Waypoint", "Symbol"], [waypoint, exchange["symbol"]])
             db_update("Markets", ["isExchange"], [True], ["Waypoint", "Symbol"], [waypoint, exchange["symbol"]])
 
@@ -156,6 +156,8 @@ def get_market(token, waypoint, priority="NORMAL"):
             db_update("Markets", ["TradeVolume", "Supply", "PurchasePrice", "SellPrice", "timestamp"],
                       [tg["tradeVolume"], tg["supply"], tg["purchasePrice"], tg["sellPrice"], datetime.datetime.utcnow()],
                       ["Waypoint", "Symbol"], [waypoint, tg["symbol"]])
+
+    return response
 
 
 def get_shipyard(token, waypoint, priority="NORMAL"):
@@ -174,6 +176,12 @@ def get_shipyard(token, waypoint, priority="NORMAL"):
             db_insert("Shipyards", ["Waypoint", "ShipType", "ShipName"], [waypoint, ship["type"], ship["name"]])
         db_update("Shipyards", ["PurchasePrice", "timestamp"], [ship["purchasePrice"], datetime.datetime.utcnow()],
                   ["Waypoint", "ShipType"], [waypoint, ship["type"]])
+    return response
+
+
+def get_ship(agent, token, priority="NORMAL"):
+    endpoint = "my/ships/" + agent + "-1"
+    response = rh.get(endpoint, token=token, priority=priority).json()
     return response
 
 
@@ -353,7 +361,7 @@ def main():
 
     for t in threads:
         t.start()
-        print(t)
+
     if __name__ == '__main__':
         time.sleep(1)
         num_alive = 0
@@ -362,11 +370,18 @@ def main():
                 num_alive += 1
         print("Living threads:", num_alive)
 
-        for t in threads:
-            t.join()
+        while num_alive > 0:
+            time.sleep(60)
+            num_alive = 0
+            for t in threads:
+                if t.is_alive():
+                    num_alive += 1
+            print("Living threads:", num_alive)
+
     else:
         return systems_agents_dict
 
 
 if __name__ == '__main__':
-    main()
+    while True:
+        main()
