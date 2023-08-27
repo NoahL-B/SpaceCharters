@@ -9,12 +9,20 @@ class Ship:
         self.Arrival = Arrival
         self.Completed = Completed
         self.printID = printID
+        self.waypoints = []
+
+    def add_waypoint(self, waypoint):
+        if waypoint not in self.waypoints:
+            self.waypoints.append(waypoint)
 
     def start(self):
         if self.Completed is not None and self.Completed:
             print("Closing completed thread", self.printID)
             return
-        all_waypoints = db_get("Waypoints")
+        if self.waypoints:
+            all_waypoints = self.waypoints
+        else:
+            all_waypoints = db_get("Waypoints")
         relevant_waypoints = []
         for wp in all_waypoints:
             if wp[1] == self.System and not wp[2]:
@@ -49,12 +57,23 @@ class Ship:
                 print("closing incomplete thread", self.printID, sleep_time)
                 return
             time.sleep(sleep_seconds)
-        print("check6", self.printID)
+        print("check6", self.printID, sleep_time)
 
         c = chart(self.ID, self.Token)
-        if not c:
-            wp_name = relevant_waypoints[0][0]
+        if c:
+            wp_name = c["data"]["waypoint"]["symbol"]
+            traits = c["data"]["waypoint"]["traits"]
+        else:
+            wp_name = relevant_waypoints[0][0]  # TODO: make this check what waypoint the ship is actually at, not just assume.
             db_update("Waypoints", ["Charted"], [True], ["Waypoint"], [wp_name])
+            wp_data = get_waypoint(self.Token, wp_name, "HIGH")
+            traits = wp_data["data"]["traits"]
+
+        for t in traits:
+            if t["symbol"] == "MARKETPLACE":
+                get_market(self.Token, wp_name)
+            elif t["symbol"] == "SHIPYARD":
+                get_shipyard(self.Token, wp_name)
 
         relevant_waypoints.pop(0)
         for wp in relevant_waypoints:
@@ -73,8 +92,18 @@ class Ship:
                 time.sleep(sleep_seconds)
 
             c = chart(self.ID, self.Token)
-            if not c:
+            if c:
+                traits = c["data"]["waypoint"]["traits"]
+            else:
                 db_update("Waypoints", ["Charted"], [True], ["Waypoint"], [wp_name])
+                wp_data = get_waypoint(self.Token, wp_name, "HIGH")
+                traits = wp_data["data"]["traits"]
+
+            for t in traits:
+                if t["symbol"] == "MARKETPLACE":
+                    get_market(self.Token, wp_name)
+                elif t["symbol"] == "SHIPYARD":
+                    get_shipyard(self.Token, wp_name)
 
         db_update("Agents", ["Completed"], [True], ["ID"], [self.ID])
         self.Completed = True

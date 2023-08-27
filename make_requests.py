@@ -31,23 +31,25 @@ class RequestHandler:
         self.pacing_time = datetime.datetime.utcnow()
         self.pacing_rc = 0
         self.pacing_src = 0
-        self.request_queue = []
+        self.request_queue = {"HIGH": [], "NORMAL": [], "LOW": []}
         self.queue_lock = threading.Lock()
         self.request_lock = threading.Lock()
 
     def __fulfill_queue(self):
         if not self.request_lock.locked():
             self.queue_lock.acquire()
-            try:
-                print(self.queue_len(), self.request_count, self.request_queue[0])
-            except IndexError:
-                print(self.queue_len(), self.request_count, self.request_queue)
-            if self.request_queue:
-                result, func, args = self.request_queue.pop(0)
+            if self.request_queue["HIGH"]:
+                result, func, args = self.request_queue["HIGH"].pop(0)
+            elif self.request_queue["NORMAL"]:
+                result, func, args = self.request_queue["NORMAL"].pop(0)
+            elif self.request_queue["LOW"]:
+                result, func, args = self.request_queue["LOW"].pop(0)
             else:
                 self.queue_lock.release()
                 return
             self.queue_lock.release()
+
+            print(self.queue_len(), self.request_count, args)
 
             self.request_lock.acquire()
             result.append(func(*args, ))
@@ -56,15 +58,26 @@ class RequestHandler:
         else:
             time.sleep(1)
 
-    def queue_len(self):
-        return len(self.request_queue)
+    def __add_to_queue(self, queue_item, priority="NORMAL"):
+        if priority not in ["HIGH", "NORMAL", "LOW"]:
+            raise ValueError
+        self.queue_lock.acquire()
+        priority_queue = self.request_queue[priority]
+        priority_queue.append(queue_item)
+        self.queue_lock.release()
 
-    def __queue_request(self, func, args):
+    def queue_len(self):
+        self.queue_lock.acquire()
+        total_len = len(self.request_queue["HIGH"])
+        total_len += len(self.request_queue["NORMAL"])
+        total_len += len(self.request_queue["LOW"])
+        self.queue_lock.release()
+        return total_len
+
+    def __queue_request(self, func, args, priority="NORMAL"):
         result = []
         queue_item = (result, func, args)
-        self.queue_lock.acquire()
-        self.request_queue.append(queue_item)
-        self.queue_lock.release()
+        self.__add_to_queue(queue_item, priority=priority)
         while not result:
             self.__fulfill_queue()
 
@@ -139,14 +152,14 @@ class RequestHandler:
         else:
             self.recent_burst_times.append(now)
 
-    def get(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None):
-        return self.__queue_request(self.__make_request, ("GET", endpoint, params, headers, token))
+    def get(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None, priority="NORMAL"):
+        return self.__queue_request(self.__make_request, ("GET", endpoint, params, headers, token), priority=priority)
 
-    def post(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None):
-        return self.__queue_request(self.__make_request, ("POST", endpoint, params, headers, token))
+    def post(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None, priority="NORMAL"):
+        return self.__queue_request(self.__make_request, ("POST", endpoint, params, headers, token), priority=priority)
 
-    def patch(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None):
-        return self.__queue_request(self.__make_request, ("PATCH", endpoint, params, headers, token))
+    def patch(self, endpoint: str, params: dict = None, headers: dict = None, token: str = None, priority="NORMAL"):
+        return self.__queue_request(self.__make_request, ("PATCH", endpoint, params, headers, token), priority=priority)
 
     @rate_limit_retry
     def __make_request(self, request_type: str, endpoint: str, params: dict = None, headers: dict = None, token: str = None):

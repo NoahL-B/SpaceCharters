@@ -30,54 +30,54 @@ def time_str_to_datetime(time_str: str or datetime.datetime) -> datetime.datetim
     return dt
 
 
-def register(agent_name, faction, system):
+def register(agent_name, faction, system, priority="NORMAL"):
     payload = {
         "faction": faction,
         "symbol": agent_name
     }
-    response = rh.post("register", payload, token=None).json()
+    response = rh.post("register", payload, token=None, priority=priority).json()
 
     db_insert("Agents", ["ID", "Token", "System"], [agent_name, response["data"]["token"], system])
 
     return response
 
 
-def orbit(agent, token):
+def orbit(agent, token, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/orbit"
-    return rh.post(endpoint, token=token).json()
+    return rh.post(endpoint, token=token, priority=priority).json()
 
 
-def drift(agent, token):
+def drift(agent, token, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/nav"
     payload = {"flightMode": "DRIFT"}
 
-    response = rh.patch(endpoint, payload, token=token).json()
+    response = rh.patch(endpoint, payload, token=token, priority=priority).json()
     return response
 
 
-def warp(agent, token, waypoint):
+def warp(agent, token, waypoint, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/warp"
     payload = {"waypointSymbol": waypoint}
 
-    response = rh.post(endpoint, payload, token=token).json()
+    response = rh.post(endpoint, payload, token=token, priority=priority).json()
     try:
         arrival_time = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
     except KeyError:
         if response["error"]["code"] == 4236:  # not in orbit
-            orbit(agent, token)
-            drift(agent, token)
+            orbit(agent, token, priority="HIGH")
+            drift(agent, token, priority="HIGH")
             return warp(agent, token, waypoint)
         elif response["error"]["code"] == 4203:  # not enough fuel
-            drift(agent, token)
+            drift(agent, token, priority="HIGH")
             return warp(agent, token, waypoint)
         elif response["error"]["code"] == 4214:  # in transit
             response = {"data": {"nav": {"route": {"arrival": response["error"]["data"]["arrival"]}}}}
             arrival_time = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
         elif response["error"]["code"] == 4235:  # destination in same system
-            return nav(agent, token, waypoint)
+            return nav(agent, token, waypoint, priority=priority)
         else:
             print(response["error"])
             raise KeyError
@@ -87,11 +87,11 @@ def warp(agent, token, waypoint):
     return response
 
 
-def chart(agent, token):
+def chart(agent, token, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/chart"
 
-    response = rh.post(endpoint, token=token)
+    response = rh.post(endpoint, token=token, priority=priority)
     if response.status_code == 201:
         data = response.json()["data"]
         waypoint = data["waypoint"]["symbol"]
@@ -100,12 +100,20 @@ def chart(agent, token):
     return False
 
 
-def nav(agent, token, waypoint):
+def get_waypoint(token, waypoint, priority="NORMAL"):
+    system = waypoint_to_system(waypoint)
+    endpoint = "systems/" + system + "/waypoints/" + waypoint
+
+    response = rh.get(endpoint, token=token, priority=priority)
+    return response.json()
+
+
+def nav(agent, token, waypoint, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/navigate"
     payload = {"waypointSymbol": waypoint}
 
-    response = rh.post(endpoint, payload, token=token).json()
+    response = rh.post(endpoint, payload, token=token, priority=priority).json()
     try:
         arrival_time = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
     except KeyError:
@@ -119,6 +127,53 @@ def nav(agent, token, waypoint):
             print(response["error"])
             raise KeyError
     db_update("Agents", ["Arrival"], [arrival_time], ["ID"], [agent])
+    return response
+
+
+def get_market(token, waypoint, priority="NORMAL"):
+    system = waypoint_to_system(waypoint)
+    endpoint = "systems/" + system + "/waypoints/" + waypoint + "/market"
+    response = rh.get(endpoint, token=token, priority=priority).json()
+    market = response["data"]
+    existing_market_data = db_get("Markets")
+    market_logged = False
+    for x in existing_market_data:
+        if x[1] == waypoint:
+            market_logged = True
+    if not market_logged:
+        for export in market["exports"]:
+            db_insert("Markets", ["Waypoint", "Symbol"], [waypoint, export["symbol"]])
+            db_update("Markets", ["isExport"], [True], ["Waypoint", "Symbol"], [waypoint, export["symbol"]])
+        for import_ in market["imports"]:
+            db_insert("Markets", ["Waypoint", "Symbol"], [waypoint, import_["symbol"]])
+            db_update("Markets", ["isImport"], [True], ["Waypoint", "Symbol"], [waypoint, import_["symbol"]])
+        for exchange in market["exports"]:
+            db_insert("Markets", ["Waypoint", "Symbol"], [waypoint, exchange["symbol"]])
+            db_update("Markets", ["isExchange"], [True], ["Waypoint", "Symbol"], [waypoint, exchange["symbol"]])
+
+    if "tradeGoods" in market.keys():
+        for tg in market["tradeGoods"]:
+            db_update("Markets", ["TradeVolume", "Supply", "PurchasePrice", "SellPrice", "timestamp"],
+                      [tg["tradeVolume"], tg["supply"], tg["purchasePrice"], tg["sellPrice"], datetime.datetime.utcnow()],
+                      ["Waypoint", "Symbol"], [waypoint, tg["symbol"]])
+
+
+def get_shipyard(token, waypoint, priority="NORMAL"):
+    system = waypoint_to_system(waypoint)
+    endpoint = "systems/" + system + "/waypoints/" + waypoint + "/shipyard"
+    response = rh.get(endpoint, token=token, priority=priority).json()
+    shipyard = response["data"]
+    existing_shipyard_data = db_get("Shipyards")
+    shipyard_logged = False
+    for x in existing_shipyard_data:
+        if x[1] == waypoint:
+            shipyard_logged = True
+
+    for ship in shipyard["ships"]:
+        if not shipyard_logged:
+            db_insert("Shipyards", ["Waypoint", "ShipType", "ShipName"], [waypoint, ship["type"], ship["name"]])
+        db_update("Shipyards", ["PurchasePrice", "timestamp"], [ship["purchasePrice"], datetime.datetime.utcnow()],
+                  ["Waypoint", "ShipType"], [waypoint, ship["type"]])
     return response
 
 
@@ -169,7 +224,7 @@ def get_factions():
     endpoint = "factions"
     querystring = {"limit": "20"}
 
-    response = rh.get(endpoint, querystring).json()
+    response = rh.get(endpoint, querystring, priority="LOW").json()
     return response
 
 
@@ -288,20 +343,30 @@ def main():
                 time.sleep(1.5)
             x = threading.Thread(target=systems_agents_dict[system].start, daemon=True)
             threads.append(x)
-            x.start()
 
-    count = 0
+    all_waypoints = db_get("Waypoints")
+    for wp in all_waypoints:
+        sys = wp[1]
+        if sys in systems_agents_dict.keys():
+            ship = systems_agents_dict[sys]
+            ship.add_waypoint(wp)
+
     for t in threads:
-        # t.start()
+        t.start()
         print(t)
-        count += 1
     if __name__ == '__main__':
+        time.sleep(1)
+        num_alive = 0
+        for t in threads:
+            if t.is_alive():
+                num_alive += 1
+        print("Living threads:", num_alive)
+
         for t in threads:
             t.join()
     else:
-        return threads
+        return systems_agents_dict
 
 
 if __name__ == '__main__':
-    while True:
-        main()
+    main()
