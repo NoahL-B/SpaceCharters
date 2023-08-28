@@ -34,6 +34,12 @@ class Ship:
         all_waypoints = None  # garbage collection go brrr
 
         if not relevant_waypoints:
+            orbit(self.ID, self.Token)
+            drift(self.ID, self.Token, "HIGH")
+            response = warp(self.ID, self.Token, self.waypoints[0][0], "HIGH")
+            arrival = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
+            self.Arrival = arrival
+            db_update("Agents", ["Arrival"], [arrival], ["ID"], [self.ID])
             db_update("Agents", ["Completed"], [True], ["ID"], [self.ID])
             self.Completed = True
             print("closing completed thread", self.printID)

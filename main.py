@@ -326,7 +326,7 @@ def main():
     systems_agents_dict = {}
     all_waypoints = db_get("Waypoints")
     for wp in all_waypoints:
-        if not wp[2] and wp[1] not in systems_agents_dict.keys():
+        if wp[1] not in systems_agents_dict.keys():
             systems_agents_dict[wp[1]] = None
     existing_agents = db_get("Agents")
     printID = 1
@@ -368,7 +368,6 @@ def main():
                 s = Ship(agent_name, token, system, printID=printID)
                 printID += 1
                 systems_agents_dict[system] = s
-                time.sleep(1.5)
             x = threading.Thread(target=systems_agents_dict[system].start, daemon=True)
             threads.append(x)
 
