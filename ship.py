@@ -31,7 +31,7 @@ class Ship:
             if wp[1] == self.System and not wp[2]:
                 relevant_waypoints.append(wp)
 
-        all_waypoints = None  # garbage collection go brrrrr
+        all_waypoints = None  # garbage collection go brrr
 
         if not relevant_waypoints:
             db_update("Agents", ["Completed"], [True], ["ID"], [self.ID])
@@ -40,24 +40,19 @@ class Ship:
             return
 
         if self.Arrival is None:
-            # print("check1", self.printID)
-            o = orbit(self.ID, self.Token)
-            # print("check2", self.printID)
-            d = drift(self.ID, self.Token)
-            # print("check3", self.printID)
-            response = warp(self.ID, self.Token, relevant_waypoints[0][0])
-            # print("check4", self.printID)
+            orbit(self.ID, self.Token)
+            drift(self.ID, self.Token, "HIGH")
+            response = warp(self.ID, self.Token, relevant_waypoints[0][0], "HIGH")
             arrival = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
             self.Arrival = arrival
             db_update("Agents", ["Arrival"], [arrival], ["ID"], [self.ID])
-        # print("check5", self.printID)
 
         now = datetime.datetime.utcnow()
         sleep_time = self.Arrival - now
 
         sleep_seconds = sleep_time / datetime.timedelta(seconds=1)
         if sleep_seconds > 0:
-            if sleep_time > datetime.timedelta(hours=0, minutes=20, seconds=0):
+            if sleep_time > datetime.timedelta(hours=4, minutes=20, seconds=0):
                 print("closing incomplete thread", self.printID, sleep_time)
                 return
             print("continuing thread", self.printID, "in", sleep_time)
@@ -68,7 +63,7 @@ class Ship:
             wp_name = c["data"]["waypoint"]["symbol"]
             traits = c["data"]["waypoint"]["traits"]
         else:
-            wp_name = get_ship(self.ID, self.Token)["data"]["nav"]["waypointSymbol"]
+            wp_name = get_ship(self.ID, self.Token, "HIGH")["data"]["nav"]["waypointSymbol"]
             db_update("Waypoints", ["Charted"], [True], ["Waypoint"], [wp_name])
             wp_data = get_waypoint(self.Token, wp_name, "HIGH")
             traits = wp_data["data"]["traits"]
@@ -83,12 +78,9 @@ class Ship:
             relevant_waypoints.pop(0)
 
         for wp in relevant_waypoints:
-            # print("check7", self.printID)
             wp_name = wp[0]
-            n = nav(self.ID, self.Token, wp_name)
+            n = nav(self.ID, self.Token, wp_name, "HIGH")
             self.Arrival = time_str_to_datetime(n["data"]["nav"]["route"]["arrival"])
-
-            # print("check8", self.printID)
 
             now = datetime.datetime.utcnow()
             sleep_time = self.Arrival - now
@@ -119,11 +111,10 @@ class Ship:
 
     def verify_charted(self):
         verified = True
-        for waypoint in self.waypoints:
-            wp_obj = get_waypoint(self.Token, waypoint[0])
-            for trait in wp_obj["data"]["traits"]:
+        for wp_obj in list_waypoints(self.Token, self.System):
+            for trait in wp_obj["traits"]:
                 if trait["symbol"] == "UNCHARTED":
-                    db_update("Waypoints", ["Charted"], [False], ["Waypoint"], [waypoint[0]])
+                    db_update("Waypoints", ["Charted"], [False], ["Waypoint"], [wp_obj["symbol"]])
                     verified = False
         if not verified:
             print("chart verification failed", self.System)
@@ -133,17 +124,16 @@ class Ship:
             print("charting verified")
 
     def update_markets_and_shipyards(self):
-        for waypoint in self.waypoints:
-            wp_obj = get_waypoint(self.Token, waypoint[0])
+        for wp_obj in list_waypoints(self.Token, self.System):
             has_market = False
             has_shipyard = False
-            for trait in wp_obj["data"]["traits"]:
+            for trait in wp_obj["traits"]:
                 if trait["symbol"] == "MARKETPLACE":
                     has_market = True
                 elif trait["symbol"] == "SHIPYARD":
                     has_shipyard = True
             if has_shipyard or has_market:
-                n = nav(self.ID, self.Token, waypoint[0])
+                n = nav(self.ID, self.Token, wp_obj["symbol"])
                 self.Arrival = time_str_to_datetime(n["data"]["nav"]["route"]["arrival"])
 
                 now = datetime.datetime.utcnow()
@@ -154,6 +144,6 @@ class Ship:
                     time.sleep(sleep_seconds)
 
                 if has_shipyard:
-                    get_shipyard(self.Token, waypoint)
+                    get_shipyard(self.Token, wp_obj["symbol"])
                 if has_market:
-                    get_market(self.Token, waypoint)
+                    get_market(self.Token, wp_obj["symbol"])

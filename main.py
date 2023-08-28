@@ -108,6 +108,26 @@ def get_waypoint(token, waypoint, priority="NORMAL"):
     return response.json()
 
 
+def list_waypoints(token, system, priority="NORMAL"):
+    endpoint = "systems/" + system + "/waypoints"
+    waypoints_list = []
+    all_collected = False
+    page = 1
+    while not all_collected:
+        params = {
+            "limit": 20,
+            "page": page
+        }
+        response = rh.get(endpoint, token=token, params=params, priority=priority).json()
+        data = response["data"]
+        for wp in data:
+            waypoints_list.append(wp)
+        if len(waypoints_list) == response["meta"]["total"]:
+            all_collected = True
+        page += 1
+    return waypoints_list
+
+
 def nav(agent, token, waypoint, priority="NORMAL"):
     ship_name = agent + "-1"
     endpoint = "my/ships/" + ship_name + "/navigate"
@@ -363,7 +383,7 @@ def main():
         t.start()
 
     if __name__ == '__main__':
-        time.sleep(1)
+        time.sleep(.1)
         num_alive = 0
         for t in threads:
             if t.is_alive():
@@ -376,7 +396,8 @@ def main():
             for t in threads:
                 if t.is_alive():
                     num_alive += 1
-            print("Living threads:", num_alive)
+            with rh.print_lock:
+                print("Living threads:", num_alive)
 
     else:
         return systems_agents_dict

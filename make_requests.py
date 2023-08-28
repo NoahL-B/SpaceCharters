@@ -19,6 +19,17 @@ def rate_limit_retry(func, max_tries=10):
     return wrapper
 
 
+def print_builder(*args, min_spaces=2, spaces=7):
+    out_str = ""
+    for a in args:
+        if a is not None:
+            str_a = str(a) + " " * min_spaces
+            while len(str_a) < spaces:
+                str_a += " "
+            out_str += str_a
+    return out_str
+
+
 class RequestHandler:
     def __init__(self, rate_limit: int = 2, burst_limit: int = 10):
         self.rate_limit = rate_limit
@@ -34,6 +45,7 @@ class RequestHandler:
         self.request_queue = {"HIGH": [], "NORMAL": [], "LOW": []}
         self.queue_lock = threading.Lock()
         self.request_lock = threading.Lock()
+        self.print_lock = threading.Lock()
 
     def __fulfill_queue(self):
         if not self.request_lock.locked():
@@ -49,7 +61,9 @@ class RequestHandler:
                 return
             self.queue_lock.release()
 
-            print(self.queue_len(), self.request_count, args)
+            printout = print_builder(self.queue_len(), self.request_count, str(self.get_rpm())[:5], *args[:4])
+            with self.print_lock:
+                print(printout)
 
             self.request_lock.acquire()
             result.append(func(*args, ))
