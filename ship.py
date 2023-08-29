@@ -58,7 +58,7 @@ class Ship:
 
         sleep_seconds = sleep_time / datetime.timedelta(seconds=1)
         if sleep_seconds > 0:
-            if sleep_time > datetime.timedelta(hours=4, minutes=20, seconds=0):
+            if sleep_time > datetime.timedelta(days=7, hours=0, minutes=0, seconds=0):
                 print("closing incomplete thread", self.printID, sleep_time)
                 return
             print("continuing thread", self.printID, "in", sleep_time)
@@ -120,36 +120,37 @@ class Ship:
         for wp_obj in list_waypoints(self.Token, self.System):
             for trait in wp_obj["traits"]:
                 if trait["symbol"] == "UNCHARTED":
-                    db_update("Waypoints", ["Charted"], [False], ["Waypoint"], [wp_obj["symbol"]])
                     verified = False
         if not verified:
             print("chart verification failed", self.System)
             self.waypoints = []
+            self.Completed = False
             self.start()
         else:
             print("charting verified")
 
     def update_markets_and_shipyards(self):
-        for wp_obj in list_waypoints(self.Token, self.System):
-            has_market = False
-            has_shipyard = False
-            for trait in wp_obj["traits"]:
-                if trait["symbol"] == "MARKETPLACE":
-                    has_market = True
-                elif trait["symbol"] == "SHIPYARD":
-                    has_shipyard = True
-            if has_shipyard or has_market:
-                n = nav(self.ID, self.Token, wp_obj["symbol"])
-                self.Arrival = time_str_to_datetime(n["data"]["nav"]["route"]["arrival"])
 
-                now = datetime.datetime.utcnow()
-                sleep_time = self.Arrival - now
+        markets = db_get_where("Waypoints", ["System", "Marketplace"], [self.System, True])
+        shipyards = db_get_where("Waypoints", ["System", "Marketplace", "Shipyard"], [self.System, False, True])
+        to_update = markets + shipyards
 
-                sleep_seconds = sleep_time / datetime.timedelta(seconds=1)
-                if sleep_seconds > 0:
-                    time.sleep(sleep_seconds)
+        for wp in to_update:
+            with rh.print_lock:
+                print("Market research continuing towards", wp[0])
+            n = nav(self.ID, self.Token, wp[0], "LOW")
+            self.Arrival = time_str_to_datetime(n["data"]["nav"]["route"]["arrival"])
 
-                if has_shipyard:
-                    get_shipyard(self.Token, wp_obj["symbol"])
-                if has_market:
-                    get_market(self.Token, wp_obj["symbol"])
+            now = datetime.datetime.utcnow()
+            sleep_time = self.Arrival - now
+
+            sleep_seconds = sleep_time / datetime.timedelta(seconds=1)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+            if wp[4]:
+                get_shipyard(self.Token, wp[0], "LOW")
+            if wp[3]:
+                get_market(self.Token, wp[0], "LOW")
+        with rh.print_lock:
+            print("ending market research", self.System)

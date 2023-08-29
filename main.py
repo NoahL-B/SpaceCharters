@@ -75,6 +75,7 @@ def warp(agent, token, waypoint, priority="NORMAL"):
             return warp(agent, token, waypoint)
         elif response["error"]["code"] == 4214:  # in transit
             response = {"data": {"nav": {"route": {"arrival": response["error"]["data"]["arrival"]}}}}
+            waypoint = response["error"]["data"]["destinationSymbol"]
             arrival_time = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
         elif response["error"]["code"] == 4235:  # destination in same system
             return nav(agent, token, waypoint, priority=priority)
@@ -82,7 +83,7 @@ def warp(agent, token, waypoint, priority="NORMAL"):
             print(response["error"])
             raise KeyError
 
-    db_update("Agents", ["Arrival"], [arrival_time], ["ID"], [agent])
+    db_update("Agents", ["Arrival", "Waypoint"], [arrival_time, waypoint], ["ID"], [agent])
 
     return response
 
@@ -105,6 +106,10 @@ def get_waypoint(token, waypoint, priority="NORMAL"):
     endpoint = "systems/" + system + "/waypoints/" + waypoint
 
     response = rh.get(endpoint, token=token, priority=priority)
+
+    wp = response.json()["data"]
+    update_waypoint_traits(wp)
+
     return response.json()
 
 
@@ -122,6 +127,7 @@ def list_waypoints(token, system, priority="NORMAL"):
         data = response["data"]
         for wp in data:
             waypoints_list.append(wp)
+            update_waypoint_traits(wp)
         if len(waypoints_list) == response["meta"]["total"]:
             all_collected = True
         page += 1
@@ -139,6 +145,7 @@ def nav(agent, token, waypoint, priority="NORMAL"):
     except KeyError:
         if response["error"]["code"] == 4214:  # in transit
             response = {"data": {"nav": {"route": {"arrival": response["error"]["data"]["arrival"]}}}}
+            waypoint = response["error"]["data"]["destinationSymbol"]
             arrival_time = time_str_to_datetime(response["data"]["nav"]["route"]["arrival"])
         elif response["error"]["code"] == 4204:  # already at destination
             response = {"data": {"nav": {"route": {"arrival": datetime.datetime.utcnow()}}}}
@@ -146,7 +153,7 @@ def nav(agent, token, waypoint, priority="NORMAL"):
         else:
             print(response["error"])
             raise KeyError
-    db_update("Agents", ["Arrival"], [arrival_time], ["ID"], [agent])
+    db_update("Agents", ["Arrival", "Waypoint"], [arrival_time, waypoint], ["ID"], [agent])
     return response
 
 
@@ -202,49 +209,57 @@ def get_shipyard(token, waypoint, priority="NORMAL"):
 def get_ship(agent, token, priority="NORMAL"):
     endpoint = "my/ships/" + agent + "-1"
     response = rh.get(endpoint, token=token, priority=priority).json()
+    db_update("Agents", ["Waypoint"], [response["data"]["nav"]["waypointSymbol"]], ["ID"], [agent])
     return response
 
 
 def db_insert(table_name, column_name_list, value_list):
-    db_lock.acquire()
-
-    cmd = "INSERT INTO " + table_name + "(" + column_name_list[0]
-    for col_name in column_name_list[1:]:
-        cmd += ", " + col_name
-    cmd += ") VALUES ('" + str(value_list[0])
-    for value in value_list[1:]:
-        cmd += "', '" + str(value)
-    cmd += "');"
-    cursor.execute(cmd)
-
-    db_lock.release()
+    with db_lock:
+        cmd = "INSERT INTO " + table_name + "(" + column_name_list[0]
+        for col_name in column_name_list[1:]:
+            cmd += ", " + col_name
+        cmd += ") VALUES ('" + str(value_list[0])
+        for value in value_list[1:]:
+            cmd += "', '" + str(value)
+        cmd += "');"
+        cursor.execute(cmd)
 
 
 def db_update(table_name, update_column_name_list, update_value_list, where_column_name_list, where_value_list):
-    db_lock.acquire()
-
-    cmd = "UPDATE " + table_name + " SET " + table_name + "." + update_column_name_list[0] + ' = ?'
-    for i in range(1, len(update_column_name_list)):
-        cmd += ", " + table_name + "." + update_column_name_list[i] + ' = ?'
-    cmd += " WHERE (((" + table_name + "." + where_column_name_list[0] + ')=?)'
-    for i in range(1, len(where_column_name_list)):
-        cmd += " AND ((" + table_name + "." + where_column_name_list[i] + ')=?)'
-    cmd += ");"
-    params = tuple(update_value_list + where_value_list)
-    cursor.execute(cmd, params)
-
-    db_lock.release()
+    with db_lock:
+        cmd = "UPDATE " + table_name + " SET " + table_name + "." + update_column_name_list[0] + ' = ?'
+        for i in range(1, len(update_column_name_list)):
+            cmd += ", " + table_name + "." + update_column_name_list[i] + ' = ?'
+        cmd += " WHERE (((" + table_name + "." + where_column_name_list[0] + ')=?)'
+        for i in range(1, len(where_column_name_list)):
+            cmd += " AND ((" + table_name + "." + where_column_name_list[i] + ')=?)'
+        cmd += ");"
+        params = tuple(update_value_list + where_value_list)
+        cursor.execute(cmd, params)
 
 
 def db_get(table_name):
-    db_lock.acquire()
+    with db_lock:
+        cmd = "SELECT * FROM " + table_name
+        cursor.execute(cmd)
+        data = []
+        for x in cursor:
+            data.append(x)
 
-    cmd = "SELECT * FROM " + table_name
-    cursor.execute(cmd)
-    data = []
-    for x in cursor:
-        data.append(x)
-    db_lock.release()
+    return data
+
+
+def db_get_where(table_name, where_column_names, where_values):
+    with db_lock:
+        cmd = "SELECT * FROM " + table_name + " WHERE (((" + table_name + "." + where_column_names[0] + ")=?)"
+        for i in range(1, len(where_column_names)):
+            cmd += " AND ((" + table_name + "." + where_column_names[i] + ')=?)'
+        cmd += ");"
+        params = tuple(where_values)
+        cursor.execute(cmd, params)
+        data = []
+        for x in cursor:
+            data.append(x)
     return data
 
 
@@ -306,10 +321,25 @@ def populate_waypoints():
         wps = rh.get(endpoint, querystring).json()["data"]
         for wp in wps:
             db_insert("Waypoints", ["Waypoint", "System"], [wp["symbol"], wp["systemSymbol"]])
-            if "chart" in wp.keys():
-                db_update("Waypoints", ["Charted"], [True], ["Waypoint"], [wp["symbol"]])
+            update_waypoint_traits(wp)
         print("\r" + str(counter), end="")
         counter += 1
+
+
+def update_waypoint_traits(waypoint: dict):
+    wp = waypoint
+    for trait in wp["traits"]:
+        if trait["symbol"] == "UNCHARTED":
+            db_update("Waypoints", ["Charted"], [False], ["Waypoint"], [wp["symbol"]])
+        elif trait["symbol"] == "MARKETPLACE":
+            db_update("Waypoints", ["Marketplace"], [True], ["Waypoint"], [wp["symbol"]])
+        elif trait["symbol"] == "SHIPYARD":
+            db_update("Waypoints", ["Shipyard"], [True], ["Waypoint"], [wp["symbol"]])
+    if "chart" in wp.keys():
+        db_update("Waypoints", ["Charted"], [True], ["Waypoint"], [wp["symbol"]])
+    if wp["type"] == "JUMP_GATE":
+        db_update("Waypoints", ["JumpGate"], [True], ["Waypoint"], [wp["symbol"]])
+        db_update("Systems", ["hasJumpGate"], [True], ["System"], [wp["systemSymbol"]])
 
 
 def clear_table(table_name):
@@ -322,12 +352,16 @@ def waypoint_to_system(waypoint):
 
 
 def main():
+    RESEARCH_MARKETS = False
+
     from ship import Ship
     systems_agents_dict = {}
+    systems_agents_dict_2 = {}
     all_waypoints = db_get("Waypoints")
     for wp in all_waypoints:
-        if wp[1] not in systems_agents_dict.keys():
-            systems_agents_dict[wp[1]] = None
+        systems_agents_dict[wp[1]] = None
+        if wp[3] or wp[4]:
+            systems_agents_dict_2[wp[1]] = None
     existing_agents = db_get("Agents")
     printID = 1
     for agent in existing_agents:
@@ -338,6 +372,8 @@ def main():
         elif not s.Completed:
             s.Completed = True
             db_update("Agents", ["Completed"], [True], ["ID"], [s.ID])
+        if s.Completed and s.System in systems_agents_dict_2.keys():
+            systems_agents_dict_2[s.System] = s
 
     j = []
     for k in systems_agents_dict.keys():
@@ -351,6 +387,7 @@ def main():
         all_systems.append(x)
 
     threads = []
+    threads2 = []
     print(len(systems_agents_dict))
 
     for sys in all_systems:
@@ -371,6 +408,12 @@ def main():
             x = threading.Thread(target=systems_agents_dict[system].start, daemon=True)
             threads.append(x)
 
+        if sys[0] in systems_agents_dict_2.keys():
+            system = sys[0]
+            if systems_agents_dict_2[system] is not None:
+                x = threading.Thread(target=systems_agents_dict_2[system].update_markets_and_shipyards, daemon=True)
+                threads2.append(x)
+
     all_waypoints = db_get("Waypoints")
     for wp in all_waypoints:
         sys = wp[1]
@@ -381,13 +424,19 @@ def main():
     for t in threads:
         t.start()
 
+    if RESEARCH_MARKETS:
+        for t in threads2:
+            t.start()
+
+    threads = threads + threads2
+
     if __name__ == '__main__':
-        time.sleep(.1)
         num_alive = 0
         for t in threads:
             if t.is_alive():
                 num_alive += 1
-        print("Living threads:", num_alive)
+        with rh.print_lock:
+            print("Living threads:", num_alive)
 
         while num_alive > 0:
             time.sleep(60)
